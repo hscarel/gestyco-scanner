@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>GestyCo · Lector de barras</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101418;color:#fff;font-family:Arial,Helvetica,sans-serif}.wrap{max-width:640px;margin:0 auto;padding:14px}.head{display:flex;align-items:center;justify-content:space-between;gap:10px}h1{font-size:20px;margin:0}.sub{font-size:14px;line-height:1.4;color:#c4cbd2}.stage{position:relative;background:#000;border-radius:14px;overflow:hidden;min-height:260px;display:flex;align-items:center;justify-content:center}video{display:block;width:100%;max-height:60vh;object-fit:cover;background:#000}canvas{display:none}.aim{position:absolute;left:5%;right:5%;top:42%;height:16%;border:2px solid #37e58c;border-radius:5px;pointer-events:none;box-shadow:0 0 0 999px #0002}.aim:after{content:"";position:absolute;left:0;right:0;top:50%;height:2px;background:#37e58c;box-shadow:0 0 8px #37e58c}.status{min-height:54px;padding:12px 2px;font-size:15px;line-height:1.4}.buttons{display:flex;gap:8px}.btn{border:0;border-radius:10px;padding:13px 12px;font-weight:bold;font-size:15px;flex:1}.primary{background:#37e58c;color:#102018}.secondary{background:#303943;color:#fff}.manual{display:flex;gap:8px;margin-top:10px}.manual input{width:100%;min-width:0;padding:12px;border-radius:9px;border:1px solid #65707b;font-size:17px}.hint{font-size:12px;color:#aeb7c0;line-height:1.4;margin-top:12px}.diagnostico{font-size:12px;color:#ffdca8;line-height:1.45;white-space:pre-wrap;margin-top:8px}
+</style></head><body><div class="wrap">
+<div class="head"><h1>📷 GestyCo · Lector</h1><button class="btn secondary" style="flex:0 0 auto" onclick="cerrar()">Cerrar</button></div>
+<p class="sub">Centrá las barras verticales dentro del recuadro verde. Mantené el código quieto, bien iluminado y a unos 15–25 cm para que enfoque. La lectura es continua: no hace falta sacar fotos.</p>
+<div class="stage" id="legacyStage"><video id="video" playsinline autoplay muted></video><div class="aim"></div></div><canvas id="canvas" width="640" height="360"></canvas>
+<div id="estado" class="status">Tocá «Activar cámara» para comenzar.</div>
+<div class="buttons"><button id="start" class="btn primary" onclick="iniciar()">Escanear con cámara</button><button class="btn secondary" onclick="abrirCamaraDelTelefono()">Usar cámara del teléfono</button></div>
+<div class="buttons" style="margin-top:8px"><button class="btn secondary" onclick="cambiarCamara()">Cambiar cámara</button><button class="btn secondary" onclick="detener()">Detener escáner</button></div>
+<div class="buttons" style="margin-top:8px"><button class="btn secondary" onclick="abrirCamaraDelTelefono()">Volver a abrir cámara del teléfono</button></div><input id="fotoCamara" type="file" accept="image/*" capture="environment" hidden onchange="leerFotoTomada(event)">
+<div class="manual"><input id="manual" inputmode="numeric" autocomplete="off" placeholder="O escribir el código de barras"><button class="btn secondary" onclick="usarManual()">Usar</button></div>
+<div id="diagnostico" class="diagnostico"></div><div class="hint">El lector usa el detector nativo del navegador cuando existe y, si no, la biblioteca ZXing con un lector local de respaldo. Si no accede a la cámara, probá «Usar cámara del teléfono» o escribí el número. La lectura solo devuelve el código a GestyCo; no modifica el stock.</div>
+</div>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" onerror="window.__zxFalla=true"></script>
+<script>
+const video=document.getElementById('video'), canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d',{willReadFrequently:true});
+const statusEl=document.getElementById('estado'), startBtn=document.getElementById('start'); let stream=null, facing='environment', running=false, busy=false, last='', lastAt=0, frame=0;
+const APP_URL = '';
+function crearDetectorNativo(){ if(!('BarcodeDetector' in window)) return null; const listas=[['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf'],['ean_13','ean_8','upc_a','upc_e','code_128'],['ean_13','ean_8']]; for(const f of listas){try{return new BarcodeDetector({formats:f});}catch(e){}} return null; }
+let liveDetector=crearDetectorNativo(), ultimoIntentoLive=0, ultimoRespaldo=0, ciclosRespaldo=0, erroresNativo=0, ultimoCodigo='', coincidencias=0, zxReader=null, motorUsado='';
+const L=['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+const G=['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+const R=['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'];
+const PAR=['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
+function say(t){statusEl.textContent=t}
+async function iniciar(){if(running)return;try{detenerTracks();document.getElementById('diagnostico').textContent='';say('Solicitando permiso de cámara al navegador…');if(!window.isSecureContext){throw Object.assign(new Error('La página no está en un contexto seguro HTTPS.'),{name:'InsecureContextError'})}if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){throw Object.assign(new Error('Este navegador o contenedor no expone la API de cámara en vivo.'),{name:'MediaDevicesUnavailable'})}try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}}});}catch(e1){if(e1&&(e1.name==='OverconstrainedError'||e1.name==='ConstraintNotSatisfiedError')){stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing}}});}else{throw e1;}}video.srcObject=stream;await video.play();await ajustarEnfoque();running=true;ultimoCodigo='';coincidencias=0;erroresNativo=0;if(!liveDetector&&'BarcodeDetector' in window)liveDetector=crearDetectorNativo();startBtn.disabled=true;startBtn.textContent='Cámara activa';say('Cámara activa. Centrá el código en la línea verde.');mostrarMotor();frame=requestAnimationFrame(loop)}catch(e){console.error('GestyCo cámara:',e);running=false;startBtn.disabled=false;startBtn.textContent='Reintentar cámara en vivo';let msg='No se pudo iniciar la cámara.';if(e.name==='NotAllowedError'||e.name==='PermissionDeniedError'){msg='PERMISO BLOQUEADO: la página no recibió autorización para usar la cámara.';document.getElementById('diagnostico').textContent='Detalle: '+e.name+'\nPágina: '+location.origin+'\nEn Chrome Android: tocá el candado/controles del sitio junto a la dirección → Permisos → Cámara → Permitir. Si ya figura Permitido, cerrá esta ventana, recargá GestyCo y probá “Volver a abrir cámara del teléfono”. También verificá Android → Ajustes → Apps → Chrome → Permisos → Cámara.'}else if(e.name==='NotFoundError'||e.name==='DevicesNotFoundError'){msg='No se detectó una cámara disponible en el dispositivo.'}else if(e.name==='NotReadableError'||e.name==='TrackStartError'){msg='La cámara está ocupada por otra aplicación o el sistema no permite abrirla. Cerrá otras apps que usen cámara.'}else if(e.name==='InsecureContextError'||e.name==='MediaDevicesUnavailable'){msg=e.message;document.getElementById('diagnostico').textContent='Origen actual: '+location.origin+'\nProbá abrir la URL del escáner directamente en Chrome, no dentro de otra aplicación.'}else{msg='Error al abrir cámara: '+(e.message||e.name);document.getElementById('diagnostico').textContent='Código técnico: '+e.name+'\nOrigen: '+location.origin}say(msg);diagnosticoCamara(e)}}
+async function diagnosticoCamara(e){
+ const L=[];
+ try{L.push('Error: '+(e&&e.name)+(e&&e.message?' – '+e.message:''));}catch(_){}
+ let politica=null;
+ try{const pp=document.permissionsPolicy||document.featurePolicy;if(pp&&pp.allowsFeature){politica=pp.allowsFeature('camera');L.push('Política de cámara de esta página: '+(politica?'PERMITIDA':'BLOQUEADA por el contenedor (iframe)'));}}catch(_){}
+ try{L.push('Dentro de un iframe: '+(window.top!==window.self?'sí':'no'));}catch(_){L.push('Dentro de un iframe: sí (no accesible)');}
+ try{if(navigator.permissions&&navigator.permissions.query){const st=await navigator.permissions.query({name:'camera'});L.push('Permiso de cámara para este sitio: '+st.state);}}catch(_){}
+ L.push('Origen: '+location.origin);
+ if(politica===false)L.push('→ El navegador no deja usar la cámara en vivo dentro de Apps Script. Usá «Usar cámara del teléfono» o alojá el escáner en una página propia (escaner_externo.html).');
+ document.getElementById('diagnostico').textContent=L.join('\n');
+}
+function abrirCamaraDelTelefono(){document.getElementById('fotoCamara').click()}
+async function leerFotoTomada(event){
+ const input=event.target, file=input.files&&input.files[0]; input.value=''; if(!file)return;
+ say('Preparando imagen pequeña para leer solo el número…');
+ document.getElementById('diagnostico').textContent='';
+ let bitmap=null, objectUrl=null;
+ try{
+   if(!/^image\//i.test(file.type)) throw new Error('El archivo recibido no es una imagen.');
+   // Pedir al navegador una versión reducida durante la decodificación evita crear un canvas de 12 MP.
+   if(!('createImageBitmap' in window)) throw new Error('Este navegador no permite reducir la foto antes de abrirla. Actualizá Chrome o ingresá el código manualmente.');
+   try { bitmap=await createImageBitmap(file,{resizeWidth:1600,resizeQuality:'high'}); }
+   catch(e) {
+     try { bitmap=await createImageBitmap(file,{resizeWidth:960,resizeQuality:'medium'}); }
+     catch(e2) { throw new Error('El navegador no pudo reducir la foto sin agotar memoria. Probá otra captura o ingresá el código manualmente.'); }
+   }
+   const sw=bitmap.width, sh=bitmap.height;
+   if(!sw||!sh) throw new Error('La cámara devolvió una imagen sin dimensiones válidas.');
+   const scale=Math.min(1,1600/sw,1200/sh,Math.sqrt(1500000/(sw*sh)));
+   const w=Math.max(1,Math.round(sw*scale)), h=Math.max(1,Math.round(sh*scale));
+   canvas.width=w; canvas.height=h; ctx.clearRect(0,0,w,h); ctx.drawImage(bitmap,0,0,w,h);
+   let code=null, detector=crearDetectorNativo();
+   if(detector){
+     try {
+       const found=await detector.detect(canvas);
+       if(found&&found.length){
+         const item=found.find(x=>/^\d{8,14}$/.test(String(x.rawValue||'')));
+         if(item) code=String(item.rawValue).trim();
+       }
+     } catch(detErr) { console.warn('Detector nativo no pudo leer la imagen; se prueba el lector local.',detErr); }
+   }
+   if(!code){
+     say('Probando varias líneas y umbrales de lectura…');
+     code=leerConZXing(canvas)||decodeEAN13(ctx.getImageData(0,0,w,h));
+   }
+   if(code){
+     // Solo se conserva el número, nunca la foto.
+     say('Código detectado: '+code+'. Devolviendo solo el número a GestyCo…');
+     sendCode(code);
+   } else {
+     say('No se reconoció el código. Probá una foto más cercana, con las barras completas, enfocadas y buena luz.');
+     document.getElementById('diagnostico').textContent='Imagen procesada: '+w+' × '+h+' px; '+(detector?'se probó el detector nativo y el lector local':'este navegador no dispone de BarcodeDetector; se probó el lector local')+'. La foto no se guardó. También podés escribir el número manualmente.';
+   }
+ }catch(err){
+   console.error('GestyCo foto:',err);
+   say('No se pudo procesar la foto; podés ingresar el número manualmente.');
+   document.getElementById('diagnostico').textContent='Detalle: '+(err&&err.message?err.message:String(err))+'\nNo se guardó ni se envió ninguna imagen.';
+ }finally{if(bitmap&&bitmap.close)bitmap.close();if(objectUrl)URL.revokeObjectURL(objectUrl);}
+}
+function detenerTracks(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
+async function cambiarCamara(){facing=facing==='environment'?'user':'environment';if(running){running=false;cancelAnimationFrame(frame);detenerTracks();startBtn.disabled=false;startBtn.textContent='Activar cámara';await iniciar()}else say('Cámara seleccionada: '+(facing==='environment'?'trasera':'frontal')+'. Tocá Activar cámara.')}
+async function ajustarEnfoque(){
+ try{const t=stream&&stream.getVideoTracks()[0];if(!t||!t.getCapabilities)return;const c=t.getCapabilities()||{};
+  if(c.focusMode&&c.focusMode.indexOf('continuous')>=0){await t.applyConstraints({advanced:[{focusMode:'continuous'}]});}
+ }catch(e){console.warn('No se pudo fijar enfoque continuo:',e);}
+}
+function mostrarMotor(){
+ const t=stream&&stream.getVideoTracks()[0];const st=t&&t.getSettings?t.getSettings():{};
+ const motor=liveDetector?'detector nativo del navegador':(zxDisponible()?'ZXing':'lector local');
+ document.getElementById('diagnostico').textContent='Lector: '+motor+(motor!=='lector local'&&!liveDetector?' + lector local de respaldo':'')+' · Cámara: '+(st.width||video.videoWidth||'?')+'×'+(st.height||video.videoHeight||'?')+' px';
+}
+function zxDisponible(){return typeof ZXing!=='undefined'&&ZXing.MultiFormatReader&&ZXing.HTMLCanvasElementLuminanceSource;}
+function crearZxReader(){
+ if(zxReader||!zxDisponible())return zxReader;
+ try{const h=new Map();h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E,ZXing.BarcodeFormat.CODE_128,ZXing.BarcodeFormat.CODE_39,ZXing.BarcodeFormat.ITF]);h.set(ZXing.DecodeHintType.TRY_HARDER,true);const r=new ZXing.MultiFormatReader();r.setHints(h);zxReader=r;}catch(e){console.warn('ZXing no se pudo inicializar:',e);zxReader=null;}
+ return zxReader;
+}
+function leerConZXing(cv){
+ const r=crearZxReader();if(!r)return null;
+ try{const lum=new ZXing.HTMLCanvasElementLuminanceSource(cv);const bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));const res=r.decode(bmp);const t=res&&res.getText?String(res.getText()).trim():'';return /^\d{8,14}$/.test(t)?t:null;}
+ catch(e){return null;} // NotFoundException: no hay código en este fotograma
+}
+// Dígito verificador GS1 (EAN-8, UPC-A, EAN-13, GTIN-14). Si coincide, la lectura es confiable al instante.
+function checksumGS1Valido(code){
+ if([8,12,13,14].indexOf(code.length)<0)return false;let sum=0;
+ for(let i=0;i<code.length-1;i++){const d=Number(code[code.length-2-i]);sum+=d*(i%2===0?3:1);}
+ return (10-(sum%10))%10===Number(code[code.length-1]);
+}
+function primerNumerico(found){if(!found||!found.length)return null;const it=found.find(x=>/^\d{8,14}$/.test(String(x.rawValue||'').trim()));return it?String(it.rawValue).trim():null;}
+// Fotograma de respaldo: franja central a resolución casi completa (antes se reducía a 640 px y se perdían las barras finas).
+function leerFrameRespaldo(){
+ const vw=video.videoWidth,vh=video.videoHeight;if(!vw||!vh)return null;
+ const sy=Math.floor(vh*0.22),sh=Math.floor(vh*0.56);const scale=Math.min(1,1280/vw);
+ const w=Math.max(320,Math.round(vw*scale)),h=Math.max(120,Math.round(sh*scale));
+ if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
+ ctx.drawImage(video,0,sy,vw,sh,0,0,w,h);
+ let code=leerConZXing(canvas);
+ if(code)return code;
+ ciclosRespaldo++;
+ if(!zxDisponible()||ciclosRespaldo%3===0)code=decodeEAN13(ctx.getImageData(0,0,w,h));
+ return code;
+}
+async function loop(){
+ if(!running)return;
+ const now=Date.now();
+ if(video.readyState>=2&&!busy&&now-ultimoIntentoLive>=120){
+   ultimoIntentoLive=now;busy=true;
+   try{
+     let code=null;
+     if(liveDetector){
+       try{code=primerNumerico(await liveDetector.detect(video));erroresNativo=0;}
+       catch(e){erroresNativo++;if(erroresNativo>=5){console.warn('Detector nativo desactivado tras errores repetidos.',e);liveDetector=null;mostrarMotor();}}
+     }
+     if(!code&&now-ultimoRespaldo>=280){ultimoRespaldo=now;code=leerFrameRespaldo();}
+     if(code){
+       if(code===ultimoCodigo)coincidencias++;else{ultimoCodigo=code;coincidencias=1;}
+       // Con dígito verificador válido se acepta al instante; sin él (Code 128/39/ITF) se pide repetir la lectura.
+       if(checksumGS1Valido(code)||coincidencias>=2){sendCode(code);return;}
+     }
+   }catch(e){console.warn('Lectura de fotograma:',e);}finally{busy=false;}
+ }
+ if(running)frame=requestAnimationFrame(loop);
+}
+function detener(){running=false;cancelAnimationFrame(frame);detenerTracks();startBtn.disabled=false;startBtn.textContent='Escanear con cámara';say('Escáner detenido.');}
+function decodeEAN13(img){
+ const {data,width:w,height:h}=img;
+ // Leer muchas filas, no solo cinco: el código puede quedar desplazado dentro de la foto.
+ const rows=[]; for(let y=Math.max(0,Math.floor(h*.18));y<Math.min(h,Math.ceil(h*.82));y+=Math.max(2,Math.floor(h/100))) rows.push(y);
+ for(const y of rows){
+   const gray=new Uint8Array(w); let min=255,max=0;
+   for(let x=0;x<w;x++){const i=(y*w+x)*4;const g=(data[i]*299+data[i+1]*587+data[i+2]*114)/1000;gray[x]=g;if(g<min)min=g;if(g>max)max=g;}
+   if(max-min<35) continue;
+   const threshold=(min+max)/2; const bits=new Uint8Array(w);for(let x=0;x<w;x++)bits[x]=gray[x]<threshold?1:0;
+   for(const invert of [false,true]){
+     const b=invert?bits.map(v=>1-v):bits, runs=[];let val=b[0],start=0;
+     for(let x=1;x<w;x++){if(b[x]!==val){runs.push({v:val,n:x-start,s:start,e:x});val=b[x];start=x;}}
+     runs.push({v:val,n:w-start,s:start,e:w});
+     for(let i=0;i<runs.length-2;i++){
+       const a=runs[i],c=runs[i+1],d=runs[i+2];if(a.v!==1||c.v!==0||d.v!==1)continue;
+       const mod=(a.n+c.n+d.n)/3;if(mod<.75||mod>35)continue;
+       const spread=Math.max(a.n,c.n,d.n)-Math.min(a.n,c.n,d.n);if(spread>mod*1.1)continue;
+       for(const factor of [1,.97,1.03,.94,1.06,.90,1.10,.86,1.14]){
+         const module=mod*factor,origin=a.s,modules=[];
+         for(let k=0;k<95;k++){const x=Math.round(origin+(k+.5)*module);if(x<0||x>=w)break;modules.push(b[x]?1:0);}
+         if(modules.length!==95)continue;const code=decodeModules(modules);if(code)return code;
+       }
+     }
+   }
+ }
+ return null;
+}
+function decodeModules(m){if(!(m[0]===1&&m[1]===0&&m[2]===1&&m[45]===0&&m[46]===1&&m[47]===0&&m[92]===1&&m[93]===0&&m[94]===1))return null;let left='',parity='';for(let d=0;d<6;d++){const s=3+d*7, p=m.slice(s,s+7).join('');let n=L.indexOf(p);if(n>=0){left+=n;parity+='L';continue}n=G.indexOf(p);if(n>=0){left+=n;parity+='G';continue}return null}const first=PAR.indexOf(parity);if(first<0)return null;let right='';for(let d=0;d<6;d++){const s=50+d*7,p=m.slice(s,s+7).join(''),n=R.indexOf(p);if(n<0)return null;right+=n}const code=String(first)+left+right;if(code.length!==13)return null;let sum=0;for(let i=0;i<12;i++)sum+=Number(code[i])*(i%2?3:1);const check=(10-(sum%10))%10;if(check!==Number(code[12]))return null;return code}
+function avisarPadre(tipo, codigo){
+ try{if(window.opener&&!window.opener.closed){window.opener.postMessage({tipo:tipo,codigo:codigo||''},'*');try{window.opener.focus();}catch(e){}return true;}}catch(e){}
+ return false;
+}
+function volverAOtroLado(){
+ try{if(window.opener&&!window.opener.closed){window.opener.focus();}}catch(e){}
+ try{window.close();}catch(e){}
+ // Apps Script/navegadores móviles pueden impedir window.close(); en ese caso
+ // dejamos de mostrar el escáner y volvemos a la aplicación, en esta misma pestaña.
+ setTimeout(function(){if(!window.closed){try{if(/^https?:\/\//i.test(APP_URL))location.replace(APP_URL);else history.back();}catch(e){try{history.back();}catch(_){}}}},350);
+}
+function sendCode(code){
+ say('Código detectado: '+code+'. Volviendo a GestyCo…');running=false;cancelAnimationFrame(frame);detenerTracks();
+ const enviado=avisarPadre('GESTYCO_CODIGO_BARRAS',code);
+ if(enviado){setTimeout(volverAOtroLado,120);return;}
+ document.getElementById('manual').value=code;
+ say('Código leído: '+code+'. No se pudo contactar la ventana anterior; el número queda disponible para copiar.');
+}
+function usarManual(){const code=document.getElementById('manual').value.trim();if(!/^\d{8,14}$/.test(code)){say('Ingresá un código numérico de 8 a 14 dígitos.');return}sendCode(code)}
+function cerrar(){
+ running=false;cancelAnimationFrame(frame);detenerTracks();
+ avisarPadre('GESTYCO_CERRAR_ESCANER','');
+ say('Cámara detenida. Volviendo a GestyCo…');
+ volverAOtroLado();
+}
+window.addEventListener('pagehide',()=>{running=false;cancelAnimationFrame(frame);detenerTracks();});
+</script></body></html>
