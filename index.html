@@ -10,12 +10,11 @@
 <div class="head"><h1>📷 GestyCo · Lector</h1><button class="btn secondary" style="flex:0 0 auto" onclick="cerrar()">Cerrar</button></div>
 <p class="sub">Centrá las barras verticales dentro del recuadro verde. Mantené el código quieto, bien iluminado y a unos 15–25 cm para que enfoque. La lectura es continua: no hace falta sacar fotos.</p>
 <div class="stage" id="legacyStage"><video id="video" playsinline autoplay muted></video><div class="aim"></div></div><canvas id="canvas" width="640" height="360"></canvas>
-<div id="estado" class="status">Tocá «Activar cámara» para comenzar.</div>
-<div class="buttons"><button id="start" class="btn primary" onclick="iniciar()">Escanear con cámara</button><button class="btn secondary" onclick="abrirCamaraDelTelefono()">Usar cámara del teléfono</button></div>
-<div class="buttons" style="margin-top:8px"><button class="btn secondary" onclick="cambiarCamara()">Cambiar cámara</button><button class="btn secondary" onclick="detener()">Detener escáner</button></div>
-<div class="buttons" style="margin-top:8px"><button class="btn secondary" onclick="abrirCamaraDelTelefono()">Volver a abrir cámara del teléfono</button></div><input id="fotoCamara" type="file" accept="image/*" capture="environment" hidden onchange="leerFotoTomada(event)">
-<div class="manual"><input id="manual" inputmode="numeric" autocomplete="off" placeholder="O escribir el código de barras"><button class="btn secondary" onclick="usarManual()">Usar</button></div>
-<div id="diagnostico" class="diagnostico"></div><div class="hint">El lector usa el detector nativo del navegador cuando existe y, si no, la biblioteca ZXing con un lector local de respaldo. Si no accede a la cámara, probá «Usar cámara del teléfono» o escribí el número. La lectura solo devuelve el código a GestyCo; no modifica el stock.</div>
+<div id="estado" class="status">Tocá «Escanear con cámara» para comenzar.</div>
+<div class="buttons"><button id="start" class="btn primary" onclick="iniciar()">Escanear con cámara</button><button class="btn secondary" onclick="detener()">Detener escáner</button></div>
+<div class="buttons" style="margin-top:8px"><button class="btn secondary" onclick="volverEscanear()">Volver a escanear</button></div>
+<div class="manual"><input id="manual" inputmode="numeric" autocomplete="off" placeholder="Código detectado o escribir código de barras"><button class="btn primary" onclick="usarManual()">Usar</button><button class="btn secondary" onclick="borrarCodigo()">Borrar</button></div>
+<div id="diagnostico" class="diagnostico"></div><div class="hint">El lector captura el código y te permite revisarlo antes de enviarlo a GestyCo. Si la lectura es incorrecta, tocá Borrar y Volver a escanear. La lectura solo devuelve el código; no modifica el stock.</div>
 </div>
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js" onerror="window.__zxFalla=true"></script>
 <script>
@@ -29,7 +28,7 @@ const G=['0100111','0110011','0011011','0100001','0011101','0111001','0000101','
 const R=['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'];
 const PAR=['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
 function say(t){statusEl.textContent=t}
-async function iniciar(){if(running)return;try{detenerTracks();document.getElementById('diagnostico').textContent='';say('Solicitando permiso de cámara al navegador…');if(!window.isSecureContext){throw Object.assign(new Error('La página no está en un contexto seguro HTTPS.'),{name:'InsecureContextError'})}if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){throw Object.assign(new Error('Este navegador o contenedor no expone la API de cámara en vivo.'),{name:'MediaDevicesUnavailable'})}try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}}});}catch(e1){if(e1&&(e1.name==='OverconstrainedError'||e1.name==='ConstraintNotSatisfiedError')){stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing}}});}else{throw e1;}}video.srcObject=stream;await video.play();await ajustarEnfoque();running=true;ultimoCodigo='';coincidencias=0;erroresNativo=0;if(!liveDetector&&'BarcodeDetector' in window)liveDetector=crearDetectorNativo();startBtn.disabled=true;startBtn.textContent='Cámara activa';say('Cámara activa. Centrá el código en la línea verde.');mostrarMotor();frame=requestAnimationFrame(loop)}catch(e){console.error('GestyCo cámara:',e);running=false;startBtn.disabled=false;startBtn.textContent='Reintentar cámara en vivo';let msg='No se pudo iniciar la cámara.';if(e.name==='NotAllowedError'||e.name==='PermissionDeniedError'){msg='PERMISO BLOQUEADO: la página no recibió autorización para usar la cámara.';document.getElementById('diagnostico').textContent='Detalle: '+e.name+'\nPágina: '+location.origin+'\nEn Chrome Android: tocá el candado/controles del sitio junto a la dirección → Permisos → Cámara → Permitir. Si ya figura Permitido, cerrá esta ventana, recargá GestyCo y probá “Volver a abrir cámara del teléfono”. También verificá Android → Ajustes → Apps → Chrome → Permisos → Cámara.'}else if(e.name==='NotFoundError'||e.name==='DevicesNotFoundError'){msg='No se detectó una cámara disponible en el dispositivo.'}else if(e.name==='NotReadableError'||e.name==='TrackStartError'){msg='La cámara está ocupada por otra aplicación o el sistema no permite abrirla. Cerrá otras apps que usen cámara.'}else if(e.name==='InsecureContextError'||e.name==='MediaDevicesUnavailable'){msg=e.message;document.getElementById('diagnostico').textContent='Origen actual: '+location.origin+'\nProbá abrir la URL del escáner directamente en Chrome, no dentro de otra aplicación.'}else{msg='Error al abrir cámara: '+(e.message||e.name);document.getElementById('diagnostico').textContent='Código técnico: '+e.name+'\nOrigen: '+location.origin}say(msg);diagnosticoCamara(e)}}
+async function iniciar(){if(running)return;try{detenerTracks();document.getElementById('diagnostico').textContent='';say('Solicitando permiso de cámara al navegador…');if(!window.isSecureContext){throw Object.assign(new Error('La página no está en un contexto seguro HTTPS.'),{name:'InsecureContextError'})}if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){throw Object.assign(new Error('Este navegador o contenedor no expone la API de cámara en vivo.'),{name:'MediaDevicesUnavailable'})}try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}}});}catch(e1){if(e1&&(e1.name==='OverconstrainedError'||e1.name==='ConstraintNotSatisfiedError')){stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing}}});}else{throw e1;}}video.srcObject=stream;await video.play();await ajustarEnfoque();running=true;ultimoCodigo='';coincidencias=0;erroresNativo=0;if(!liveDetector&&'BarcodeDetector' in window)liveDetector=crearDetectorNativo();startBtn.disabled=true;startBtn.textContent='Cámara activa';say('Cámara activa. Centrá el código en la línea verde.');mostrarMotor();frame=requestAnimationFrame(loop)}catch(e){console.error('GestyCo cámara:',e);running=false;startBtn.disabled=false;startBtn.textContent='Reintentar cámara en vivo';let msg='No se pudo iniciar la cámara.';if(e.name==='NotAllowedError'||e.name==='PermissionDeniedError'){msg='PERMISO BLOQUEADO: la página no recibió autorización para usar la cámara.';document.getElementById('diagnostico').textContent='Detalle: '+e.name+'\nPágina: '+location.origin+'\nEn Chrome Android: tocá el candado/controles del sitio junto a la dirección → Permisos → Cámara → Permitir. Si ya figura Permitido, cerrá la ventana del lector, recargá la página y volvé a probar. Verificá también los permisos de cámara de Chrome y Android.'}else if(e.name==='NotFoundError'||e.name==='DevicesNotFoundError'){msg='No se detectó una cámara disponible en el dispositivo.'}else if(e.name==='NotReadableError'||e.name==='TrackStartError'){msg='La cámara está ocupada por otra aplicación o el sistema no permite abrirla. Cerrá otras apps que usen cámara.'}else if(e.name==='InsecureContextError'||e.name==='MediaDevicesUnavailable'){msg=e.message;document.getElementById('diagnostico').textContent='Origen actual: '+location.origin+'\nProbá abrir la URL del escáner directamente en Chrome, no dentro de otra aplicación.'}else{msg='Error al abrir cámara: '+(e.message||e.name);document.getElementById('diagnostico').textContent='Código técnico: '+e.name+'\nOrigen: '+location.origin}say(msg);diagnosticoCamara(e)}}
 async function diagnosticoCamara(e){
  const L=[];
  try{L.push('Error: '+(e&&e.name)+(e&&e.message?' – '+e.message:''));}catch(_){}
@@ -38,59 +37,11 @@ async function diagnosticoCamara(e){
  try{L.push('Dentro de un iframe: '+(window.top!==window.self?'sí':'no'));}catch(_){L.push('Dentro de un iframe: sí (no accesible)');}
  try{if(navigator.permissions&&navigator.permissions.query){const st=await navigator.permissions.query({name:'camera'});L.push('Permiso de cámara para este sitio: '+st.state);}}catch(_){}
  L.push('Origen: '+location.origin);
- if(politica===false)L.push('→ El navegador no deja usar la cámara en vivo dentro de Apps Script. Usá «Usar cámara del teléfono» o alojá el escáner en una página propia (escaner_externo.html).');
+ if(politica===false)L.push('→ El navegador no deja usar la cámara en vivo dentro de Apps Script. Alojá el lector en una página HTTPS independiente, como GitHub Pages.');
  document.getElementById('diagnostico').textContent=L.join('\n');
 }
-function abrirCamaraDelTelefono(){document.getElementById('fotoCamara').click()}
-async function leerFotoTomada(event){
- const input=event.target, file=input.files&&input.files[0]; input.value=''; if(!file)return;
- say('Preparando imagen pequeña para leer solo el número…');
- document.getElementById('diagnostico').textContent='';
- let bitmap=null, objectUrl=null;
- try{
-   if(!/^image\//i.test(file.type)) throw new Error('El archivo recibido no es una imagen.');
-   // Pedir al navegador una versión reducida durante la decodificación evita crear un canvas de 12 MP.
-   if(!('createImageBitmap' in window)) throw new Error('Este navegador no permite reducir la foto antes de abrirla. Actualizá Chrome o ingresá el código manualmente.');
-   try { bitmap=await createImageBitmap(file,{resizeWidth:1600,resizeQuality:'high'}); }
-   catch(e) {
-     try { bitmap=await createImageBitmap(file,{resizeWidth:960,resizeQuality:'medium'}); }
-     catch(e2) { throw new Error('El navegador no pudo reducir la foto sin agotar memoria. Probá otra captura o ingresá el código manualmente.'); }
-   }
-   const sw=bitmap.width, sh=bitmap.height;
-   if(!sw||!sh) throw new Error('La cámara devolvió una imagen sin dimensiones válidas.');
-   const scale=Math.min(1,1600/sw,1200/sh,Math.sqrt(1500000/(sw*sh)));
-   const w=Math.max(1,Math.round(sw*scale)), h=Math.max(1,Math.round(sh*scale));
-   canvas.width=w; canvas.height=h; ctx.clearRect(0,0,w,h); ctx.drawImage(bitmap,0,0,w,h);
-   let code=null, detector=crearDetectorNativo();
-   if(detector){
-     try {
-       const found=await detector.detect(canvas);
-       if(found&&found.length){
-         const item=found.find(x=>/^\d{8,14}$/.test(String(x.rawValue||'')));
-         if(item) code=String(item.rawValue).trim();
-       }
-     } catch(detErr) { console.warn('Detector nativo no pudo leer la imagen; se prueba el lector local.',detErr); }
-   }
-   if(!code){
-     say('Probando varias líneas y umbrales de lectura…');
-     code=leerConZXing(canvas)||decodeEAN13(ctx.getImageData(0,0,w,h));
-   }
-   if(code){
-     // Solo se conserva el número, nunca la foto.
-     say('Código detectado: '+code+'. Devolviendo solo el número a GestyCo…');
-     sendCode(code);
-   } else {
-     say('No se reconoció el código. Probá una foto más cercana, con las barras completas, enfocadas y buena luz.');
-     document.getElementById('diagnostico').textContent='Imagen procesada: '+w+' × '+h+' px; '+(detector?'se probó el detector nativo y el lector local':'este navegador no dispone de BarcodeDetector; se probó el lector local')+'. La foto no se guardó. También podés escribir el número manualmente.';
-   }
- }catch(err){
-   console.error('GestyCo foto:',err);
-   say('No se pudo procesar la foto; podés ingresar el número manualmente.');
-   document.getElementById('diagnostico').textContent='Detalle: '+(err&&err.message?err.message:String(err))+'\nNo se guardó ni se envió ninguna imagen.';
- }finally{if(bitmap&&bitmap.close)bitmap.close();if(objectUrl)URL.revokeObjectURL(objectUrl);}
-}
+
 function detenerTracks(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
-async function cambiarCamara(){facing=facing==='environment'?'user':'environment';if(running){running=false;cancelAnimationFrame(frame);detenerTracks();startBtn.disabled=false;startBtn.textContent='Activar cámara';await iniciar()}else say('Cámara seleccionada: '+(facing==='environment'?'trasera':'frontal')+'. Tocá Activar cámara.')}
 async function ajustarEnfoque(){
  try{const t=stream&&stream.getVideoTracks()[0];if(!t||!t.getCapabilities)return;const c=t.getCapabilities()||{};
   if(c.focusMode&&c.focusMode.indexOf('continuous')>=0){await t.applyConstraints({advanced:[{focusMode:'continuous'}]});}
@@ -147,7 +98,7 @@ async function loop(){
      if(code){
        if(code===ultimoCodigo)coincidencias++;else{ultimoCodigo=code;coincidencias=1;}
        // Con dígito verificador válido se acepta al instante; sin él (Code 128/39/ITF) se pide repetir la lectura.
-       if(checksumGS1Valido(code)||coincidencias>=2){sendCode(code);return;}
+       if(checksumGS1Valido(code)||coincidencias>=2){mostrarCodigoDetectado(code);return;}
      }
    }catch(e){console.warn('Lectura de fotograma:',e);}finally{busy=false;}
  }
@@ -193,6 +144,15 @@ function volverAOtroLado(){
  // dejamos de mostrar el escáner y volvemos a la aplicación, en esta misma pestaña.
  setTimeout(function(){if(!window.closed){try{if(/^https?:\/\//i.test(APP_URL))location.replace(APP_URL);else history.back();}catch(e){try{history.back();}catch(_){}}}},350);
 }
+function mostrarCodigoDetectado(code){
+ running=false;cancelAnimationFrame(frame);detenerTracks();
+ startBtn.disabled=false;startBtn.textContent='Escanear con cámara';
+ document.getElementById('manual').value=String(code||'');
+ document.getElementById('diagnostico').textContent='Código capturado. Revisalo antes de enviarlo.';
+ say('Código detectado. Revisalo y tocá «Usar» para enviarlo a GestyCo.');
+}
+function borrarCodigo(){document.getElementById('manual').value='';document.getElementById('diagnostico').textContent='Código borrado. Podés volver a escanear.';say('Código borrado.');}
+async function volverEscanear(){borrarCodigo();say('Preparando nueva lectura…');await iniciar();}
 function sendCode(code){
  say('Código detectado: '+code+'. Volviendo a GestyCo…');running=false;cancelAnimationFrame(frame);detenerTracks();
  const enviado=avisarPadre('GESTYCO_CODIGO_BARRAS',code);
@@ -200,7 +160,7 @@ function sendCode(code){
  document.getElementById('manual').value=code;
  say('Código leído: '+code+'. No se pudo contactar la ventana anterior; el número queda disponible para copiar.');
 }
-function usarManual(){const code=document.getElementById('manual').value.trim();if(!/^\d{8,14}$/.test(code)){say('Ingresá un código numérico de 8 a 14 dígitos.');return}sendCode(code)}
+function usarManual(){const code=document.getElementById('manual').value.trim();if(!/^\d{8,14}$/.test(code)){say('Ingresá o confirmá un código numérico de 8 a 14 dígitos.');return}sendCode(code)}
 function cerrar(){
  running=false;cancelAnimationFrame(frame);detenerTracks();
  avisarPadre('GESTYCO_CERRAR_ESCANER','');
